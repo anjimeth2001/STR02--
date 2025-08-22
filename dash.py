@@ -60,7 +60,7 @@ for i in range(1, len(uploaded_files), 2):
 if all(files):
     with st.spinner("Merging datasets..."):
         # Load main sheet "Dye plan 8.22" explicitly
-        df_main = pd.read_excel(st.session_state.files_uploaded['exhaust_file'], sheet_name="Dye plan 8.22")
+        df_main = pd.read_excel(st.session_state.files_uploaded['exhaust_file'], sheet_name=[s for s in pd.ExcelFile(st.session_state.files_uploaded['exhaust_file']).sheet_names if s.startswith("Dye plan")][0])
         df_gre = pd.read_excel(st.session_state.files_uploaded['gre_file'])
         df_finishing = pd.read_excel(st.session_state.files_uploaded['finishing_file'])
         df_dye = pd.read_excel(st.session_state.files_uploaded['dye_file'])
@@ -146,3 +146,4 @@ if 'merged_df' in st.session_state:
         file_name="Combined_Exhaust_Consolidate.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
