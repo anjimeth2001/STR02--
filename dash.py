@@ -59,8 +59,11 @@ for i in range(1, len(uploaded_files), 2):
 # --- Merge datasets if all uploaded ---
 if all(files):
     with st.spinner("Merging datasets..."):
-        # Load main sheet "Dye plan 8.22" explicitly
-        df_main = pd.read_excel(st.session_state.files_uploaded['exhaust_file'], sheet_name="Dye plan 8.22")
+        # Auto-detect today's dye plan sheet (instead of hardcoding 8.22)
+        excel_file = pd.ExcelFile(st.session_state.files_uploaded['exhaust_file'])
+        dye_sheet = [s for s in excel_file.sheet_names if "Dye plan" in s][0]
+        df_main = pd.read_excel(st.session_state.files_uploaded['exhaust_file'], sheet_name=dye_sheet)
+
         df_gre = pd.read_excel(st.session_state.files_uploaded['gre_file'])
         df_finishing = pd.read_excel(st.session_state.files_uploaded['finishing_file'])
         df_dye = pd.read_excel(st.session_state.files_uploaded['dye_file'])
@@ -71,8 +74,8 @@ if all(files):
         for df in [df_main, df_gre, df_finishing, df_dye, df_hank, df_wf]:
             df.columns = df.columns.str.strip()
 
-        # Merge GRE Status
-        gre_merge = df_gre[['Origin order code', 'Receiving status', 'Last update DateTime Cmp/Div']].copy()
+        # Merge GRE Status (drop duplicates before merge)
+        gre_merge = df_gre[['Origin order code', 'Receiving status', 'Last update DateTime Cmp/Div']].drop_duplicates()
         df_main = df_main.merge(
             gre_merge,
             left_on='Production order',
@@ -83,9 +86,9 @@ if all(files):
         df_main['Last update DateTime Cmp/Div'].fillna('-', inplace=True)
         df_main.drop(columns=['Origin order code'], inplace=True)
 
-        # Function to merge PPOs
+        # Function to merge PPOs safely
         def merge_ppo(df_main, df_ppo, col_name):
-            ppo_merge = df_ppo[['Prod Order', 'Operation']].copy()
+            ppo_merge = df_ppo[['Prod Order', 'Operation']].drop_duplicates()
             df_main = df_main.merge(
                 ppo_merge,
                 left_on='Production order',
