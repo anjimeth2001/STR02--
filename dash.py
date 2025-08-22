@@ -59,7 +59,11 @@ for i in range(1, len(uploaded_files), 2):
 if all(files):
     with st.spinner("Merging datasets..."):
         # Load main sheet "Dye plan 8.22" explicitly
-        df_main = pd.read_excel(st.session_state.files_uploaded['exhaust_file'], sheet_name="Dye plan 8.22")
+        df_main = pd.read_excel(
+    st.session_state.files_uploaded['exhaust_file'], 
+    sheet_name=[s for s in pd.ExcelFile(st.session_state.files_uploaded['exhaust_file']).sheet_names if s.lower().startswith("dye plan")][-1]
+)
+
         
         # Ensure we have exactly 37 rows from main dataset
         original_row_count = len(df_main)
@@ -174,3 +178,4 @@ if 'merged_df' in st.session_state:
         file_name="Combined_Exhaust_Consolidate.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
