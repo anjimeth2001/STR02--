@@ -36,7 +36,7 @@ for key, file in zip(st.session_state.files_uploaded.keys(),
     if file is not None:
         st.session_state.files_uploaded[key] = file
 
-# --- Display upload status ---
+# --- Display upload status with date and time ---
 uploaded_files = []
 file_names = ['Exhaust Consolidate Plan', 'Finishing PPO', 'Hank PPO', 'GRE Status', 'Dye PPO', 'WF PPO']
 files = list(st.session_state.files_uploaded.values())
@@ -56,14 +56,11 @@ for i in range(1, len(uploaded_files), 2):
     if i < len(uploaded_files):
         col_status2.write(uploaded_files[i])
 
-# --- Merge datasets ---
+# --- Merge datasets if all uploaded ---
 if all(files):
     with st.spinner("Merging datasets..."):
-        # Auto-detect today's dye plan sheet
-        excel_file = pd.ExcelFile(st.session_state.files_uploaded['exhaust_file'])
-        dye_sheet = [s for s in excel_file.sheet_names if "Dye plan" in s][0]
-        df_main = pd.read_excel(st.session_state.files_uploaded['exhaust_file'], sheet_name=dye_sheet)
-
+        # Load main sheet "Dye plan 8.22" explicitly
+        df_main = pd.read_excel(st.session_state.files_uploaded['exhaust_file'], sheet_name="Dye plan 8.22")
         df_gre = pd.read_excel(st.session_state.files_uploaded['gre_file'])
         df_finishing = pd.read_excel(st.session_state.files_uploaded['finishing_file'])
         df_dye = pd.read_excel(st.session_state.files_uploaded['dye_file'])
@@ -74,56 +71,57 @@ if all(files):
         for df in [df_main, df_gre, df_finishing, df_dye, df_hank, df_wf]:
             df.columns = df.columns.str.strip()
 
-        # Merge GRE Status (drop duplicates)
-        gre_merge = df_gre[['Origin order code', 'Receiving status', 'Last update DateTime Cmp/Div']].drop_duplicates()
+        # Merge GRE Status
+        gre_merge = df_gre[['Origin order code', 'Receiving status', 'Last update DateTime Cmp/Div']].copy()
         df_main = df_main.merge(
             gre_merge,
             left_on='Production order',
             right_on='Origin order code',
             how='left'
-        ).drop(columns=['Origin order code']).drop_duplicates()
-
+        )
         df_main['Receiving status'].fillna('-', inplace=True)
         df_main['Last update DateTime Cmp/Div'].fillna('-', inplace=True)
+        df_main.drop(columns=['Origin order code'], inplace=True)
 
-        # Function to merge PPOs safely (drop duplicates each time)
+        # Function to merge PPOs
         def merge_ppo(df_main, df_ppo, col_name):
-            ppo_merge = df_ppo[['Prod Order', 'Operation']].drop_duplicates()
+            ppo_merge = df_ppo[['Prod Order', 'Operation']].copy()
             df_main = df_main.merge(
                 ppo_merge,
                 left_on='Production order',
                 right_on='Prod Order',
                 how='left'
-            ).drop(columns=['Prod Order', 'Operation']).drop_duplicates()
-            df_main[col_name] = df_main[col_name] if col_name in df_main else '-'
+            )
+            df_main[col_name] = df_main['Operation'].fillna('-')
+            df_main.drop(columns=['Operation', 'Prod Order'], inplace=True)
             return df_main
 
-        # Merge PPO tables
-        df_main = merge_ppo(df_main, df_finishing, 'Finishing PPO')
-        df_main = merge_ppo(df_main, df_dye, 'Dye PPO')
-        df_main = merge_ppo(df_main, df_hank, 'Hank PPO')
-        df_main = merge_ppo(df_main, df_wf, 'WF PPO')
+        # Merge all PPO tables
+        for df, name in zip([df_finishing, df_dye, df_hank, df_wf],
+                            ['Finishing PPO', 'Dye PPO', 'Hank PPO', 'WF PPO']):
+            df_main = merge_ppo(df_main, df, name)
 
-        # Final deduplication -> ensures only original Dye plan rows
-        df_main = df_main.drop_duplicates(subset=df_main.columns)
-
+        # Save merged df in session state
         st.session_state.merged_df = df_main.copy()
 
-    st.success(f"✅ Data merged successfully! ({len(df_main)} rows)")
+    st.success("✅ Data merged successfully!")
 
+    # Preview merged data
     with st.expander("Preview Merged Data"):
         st.dataframe(df_main, use_container_width=True)
 
-# --- Download button ---
+# --- Download button always visible if merged df exists ---
 if 'merged_df' in st.session_state:
     df_main = st.session_state.merged_df
 
+    # Format Excel
     output = BytesIO()
     df_main.to_excel(output, index=False)
     output.seek(0)
     wb = load_workbook(output)
     ws = wb.active
 
+    # Borders & font
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'),
                          top=Side(style='thin'), bottom=Side(style='thin'))
     font = Font(name='Aptos Narrow', size=9, color='000000')
@@ -132,10 +130,12 @@ if 'merged_df' in st.session_state:
             cell.font = font
             cell.border = thin_border
 
+    # Adjust column widths
     for col in ws.columns:
         max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in col)
         ws.column_dimensions[col[0].column_letter].width = max_length + 2
 
+    # Save formatted Excel
     formatted_output = BytesIO()
     wb.save(formatted_output)
     formatted_output.seek(0)
