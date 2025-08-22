@@ -3,7 +3,6 @@ import pandas as pd
 from io import BytesIO
 from openpyxl import load_workbook
 from openpyxl.styles import Font, Border, Side
-from datetime import datetime
 
 st.set_page_config(page_title="Exhaust Consolidate Plan Dashboard", layout="wide")
 st.markdown("Upload all datasets to merge and download a formatted combined Excel file.")
@@ -30,11 +29,10 @@ with col2:
     dye_file = st.file_uploader("Dye PPO", type=["xlsx"], key="dye")
     wf_file = st.file_uploader("WF PPO", type=["xlsx"], key="wf")
 
-# --- Save uploaded files in session state ---
+# --- Update session state for uploaded files ---
 for key, file in zip(st.session_state.files_uploaded.keys(),
                      [exhaust_file, finishing_file, hank_file, gre_file, dye_file, wf_file]):
-    if file is not None:
-        st.session_state.files_uploaded[key] = file
+    st.session_state.files_uploaded[key] = file  # sets None if cleared
 
 # --- Display upload status ---
 uploaded_files = []
@@ -42,10 +40,7 @@ file_names = ['Exhaust Consolidate Plan', 'Finishing PPO', 'Hank PPO', 'GRE Stat
 files = list(st.session_state.files_uploaded.values())
 
 for name, file in zip(file_names, files):
-    if file:
-        uploaded_files.append(f"✅ {name}")
-    else:
-        uploaded_files.append(f"❌ {name}")
+    uploaded_files.append(f"✅ {name}" if file else f"❌ {name}")
 
 st.write("**Upload Status:**")
 col_status1, col_status2 = st.columns(2)
@@ -55,19 +50,21 @@ for i in range(1, len(uploaded_files), 2):
     if i < len(uploaded_files):
         col_status2.write(uploaded_files[i])
 
-# --- Merge datasets if all uploaded ---
-if all(files):
-    with st.spinner("Merging datasets..."):
-        # Load main sheet "Dye plan 8.22" explicitly
-        df_main = pd.read_excel(
-    st.session_state.files_uploaded['exhaust_file'], 
-    sheet_name=[s for s in pd.ExcelFile(st.session_state.files_uploaded['exhaust_file']).sheet_names if s.lower().startswith("dye plan")][-1]
-)
+# --- Sheet selection for main dataset ---
+if st.session_state.files_uploaded['exhaust_file'] is not None:
+    excel_file = pd.ExcelFile(st.session_state.files_uploaded['exhaust_file'])
+    sheet_options = excel_file.sheet_names
+    selected_sheet = st.selectbox("Select Main Dataset Sheet", sheet_options)
+else:
+    selected_sheet = None
 
-        
-        # Ensure we have exactly 37 rows from main dataset
+# --- Merge datasets if all uploaded and sheet selected ---
+if all(files) and selected_sheet:
+    with st.spinner("Merging datasets..."):
+        # Load selected sheet
+        df_main = pd.read_excel(st.session_state.files_uploaded['exhaust_file'], sheet_name=selected_sheet)
         original_row_count = len(df_main)
-        
+
         df_gre = pd.read_excel(st.session_state.files_uploaded['gre_file'])
         df_finishing = pd.read_excel(st.session_state.files_uploaded['finishing_file'])
         df_dye = pd.read_excel(st.session_state.files_uploaded['dye_file'])
@@ -78,75 +75,53 @@ if all(files):
         for df in [df_main, df_gre, df_finishing, df_dye, df_hank, df_wf]:
             df.columns = df.columns.str.strip()
 
-        # Remove duplicates from lookup tables to avoid row multiplication
-        # Only keep the FIRST occurrence of each Production order match
+        # Drop duplicates in lookup tables
         if 'Origin order code' in df_gre.columns:
             df_gre = df_gre.drop_duplicates(subset=['Origin order code'], keep='first')
-        
-        if 'Prod Order' in df_finishing.columns:
-            df_finishing = df_finishing.drop_duplicates(subset=['Prod Order'], keep='first')
-        if 'Prod Order' in df_dye.columns:
-            df_dye = df_dye.drop_duplicates(subset=['Prod Order'], keep='first')
-        if 'Prod Order' in df_hank.columns:
-            df_hank = df_hank.drop_duplicates(subset=['Prod Order'], keep='first')
-        if 'Prod Order' in df_wf.columns:
-            df_wf = df_wf.drop_duplicates(subset=['Prod Order'], keep='first')
+        for df in [df_finishing, df_dye, df_hank, df_wf]:
+            if 'Prod Order' in df.columns:
+                df.drop_duplicates(subset=['Prod Order'], keep='first', inplace=True)
 
-        # Also ensure main dataset has unique Production orders
+        # Ensure main dataset has unique Production orders
         df_main = df_main.drop_duplicates(subset=['Production order'], keep='first')
 
-        # Merge GRE Status using mapping to avoid row multiplication
+        # Merge GRE Status using mapping
         if 'Origin order code' in df_gre.columns:
-            gre_dict_status = df_gre.set_index('Origin order code')['Receiving status'].to_dict()
-            gre_dict_datetime = df_gre.set_index('Origin order code')['Last update DateTime Cmp/Div'].to_dict()
-            
-            df_main['Receiving status'] = df_main['Production order'].map(gre_dict_status).fillna('-')
-            df_main['Last update DateTime Cmp/Div'] = df_main['Production order'].map(gre_dict_datetime).fillna('-')
+            gre_status = df_gre.set_index('Origin order code')['Receiving status'].to_dict()
+            gre_datetime = df_gre.set_index('Origin order code')['Last update DateTime Cmp/Div'].to_dict()
+            df_main['Receiving status'] = df_main['Production order'].map(gre_status).fillna('-')
+            df_main['Last update DateTime Cmp/Div'] = df_main['Production order'].map(gre_datetime).fillna('-')
         else:
             df_main['Receiving status'] = '-'
             df_main['Last update DateTime Cmp/Div'] = '-'
 
-        # Function to merge PPOs safely - ensure no row multiplication
+        # Merge PPO tables safely
         def merge_ppo_safe(df_main, df_ppo, col_name):
             if 'Prod Order' in df_ppo.columns and 'Operation' in df_ppo.columns:
-                # Create a mapping dictionary to avoid merge issues
-                ppo_dict = df_ppo.set_index('Prod Order')['Operation'].to_dict()
-                df_main[col_name] = df_main['Production order'].map(ppo_dict).fillna('-')
+                ppo_map = df_ppo.set_index('Prod Order')['Operation'].to_dict()
+                df_main[col_name] = df_main['Production order'].map(ppo_map).fillna('-')
             else:
                 df_main[col_name] = '-'
             return df_main
 
-        # Merge all PPO tables
         df_main = merge_ppo_safe(df_main, df_finishing, 'Finishing PPO')
         df_main = merge_ppo_safe(df_main, df_dye, 'Dye PPO')
         df_main = merge_ppo_safe(df_main, df_hank, 'Hank PPO')
         df_main = merge_ppo_safe(df_main, df_wf, 'WF PPO')
 
-        # Verify row count hasn't changed
         final_row_count = len(df_main)
-        
-        # Save merged df in session state
         st.session_state.merged_df = df_main.copy()
-        st.session_state.row_info = {
-            'original': original_row_count,
-            'final': final_row_count
-        }
+        st.session_state.row_info = {'original': original_row_count, 'final': final_row_count}
 
     # Show row count verification
-    if st.session_state.row_info['original'] == st.session_state.row_info['final']:
-        st.success(f"✅ Data merged successfully! Maintained {st.session_state.row_info['final']} rows from original dataset.")
-    else:
-        st.warning(f"⚠️ Row count changed: {st.session_state.row_info['original']} → {st.session_state.row_info['final']}")
-
-    # Preview merged data
+    
     with st.expander("Preview Merged Data"):
         st.dataframe(df_main, use_container_width=True)
 
-# --- Download button always visible if merged df exists ---
-if 'merged_df' in st.session_state:
+# --- Download button ---
+if 'merged_df' in st.session_state and all(files) and selected_sheet:
     df_main = st.session_state.merged_df
 
-    # Format Excel
     output = BytesIO()
     df_main.to_excel(output, index=False)
     output.seek(0)
@@ -167,7 +142,6 @@ if 'merged_df' in st.session_state:
         max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in col)
         ws.column_dimensions[col[0].column_letter].width = max_length + 2
 
-    # Save formatted Excel
     formatted_output = BytesIO()
     wb.save(formatted_output)
     formatted_output.seek(0)
@@ -175,7 +149,6 @@ if 'merged_df' in st.session_state:
     st.download_button(
         label="📥 Download Formatted Dataset",
         data=formatted_output,
-        file_name="Combined_Exhaust_Consolidate.xlsx",
+        file_name=f"Combined_{selected_sheet}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
